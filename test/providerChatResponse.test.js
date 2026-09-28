@@ -45,7 +45,10 @@ const vscode = {
   LanguageModelDataPart,
   LanguageModelToolCallPart,
   LanguageModelToolResultPart,
-  EventEmitter
+  EventEmitter,
+  workspace: {
+    getConfiguration: () => ({ get: () => undefined })
+  }
 };
 
 const originalLoad = Module._load;

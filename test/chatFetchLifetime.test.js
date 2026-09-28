@@ -25,7 +25,7 @@ if (process.argv.includes('--lifetime-probe')) {
       response.write('{"message":{"content":"partial"},"done":false}\n');
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const transport = createChatFetch();
+    const transport = createChatFetch(1000);
     const client = new Ollama({
       host: `http://127.0.0.1:${server.address().port}`,
       fetch: transport.fetch
@@ -62,7 +62,7 @@ async function runProbe() {
     }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const transport = createChatFetch();
+  const transport = createChatFetch(1000);
   const client = new Ollama({
     host: `http://127.0.0.1:${server.address().port}`,
     fetch: transport.fetch
