@@ -466,7 +466,7 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
     warningRequest: OutdatedModelWarningRequest,
     token: vscode.CancellationToken
   ): Promise<boolean> {
-    if (!isOutdatedAgentModel(model.model)) {
+    if (!isOutdatedAgentModel(model.name)) {
       return true;
     }
     if (this.outdatedModelWarnings.hasShown(warningRequest, model.model)) {
@@ -480,7 +480,7 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
     const chooseAnotherModel = 'Choose another model';
     const continueAnyway = 'Continue anyway';
     const outcome = await showWarningMessageUntilCancelled(
-      `${model.model} may not work as reliably with VS Code agent tools.${guidance}`,
+      `${model.name} may not work as reliably with VS Code agent tools.${guidance}`,
       [chooseAnotherModel, continueAnyway],
       token
     );

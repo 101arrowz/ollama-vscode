@@ -47,6 +47,7 @@ const vscode = {
   LanguageModelToolResultPart,
   EventEmitter,
   CancellationTokenSource: cancellationTokenSource,
+  window: { showWarningMessage: async () => undefined },
   workspace: {
     getConfiguration: () => ({ get: (_key, fallback) => fallback })
   }
@@ -223,6 +224,44 @@ test('keeps ordinary model names and falls back when the model identifier is mis
       await runChatResponse(url, collectProgress(), {}, model);
     }
     assert.deepEqual(requests.filter(request => request.path === '/api/chat').map(request => request.model), identifiers);
+  });
+});
+
+test('preserves older-model guidance when a server prefixes its identifier', async () => {
+  const warnings = [];
+  const originalWarning = vscode.window.showWarningMessage;
+  vscode.window.showWarningMessage = async (message, ...actions) => {
+    warnings.push({ message, actions });
+    return 'Continue anyway';
+  };
+  try {
+    for (const id of ['qwen2.5-coder:7b', '5090.qwen2.5-coder:7b']) {
+      warnings.length = 0;
+      await withModelServer([{ name: 'qwen2.5-coder:7b', model: id }], [id], async url => {
+        const [model] = await discoverModels(url);
+        await runChatResponse(url, collectProgress(), {}, model);
+        assert.equal(warnings.length, 1);
+        assert(warnings[0].message.startsWith('qwen2.5-coder:7b may not work as reliably'));
+        assert(warnings[0].actions.includes('Continue anyway'));
+      });
+    }
+  } finally {
+    vscode.window.showWarningMessage = originalWarning;
+  }
+});
+
+test('recognizes cloud identifiers behind display names and preserves name-only cloud models', async () => {
+  const tags = [
+    { name: 'Cloud model', model: 'qwen3.8:cloud' },
+    { name: 'qwen3.8:27b-cloud' }
+  ];
+  const identifiers = ['qwen3.8:cloud', 'qwen3.8:27b-cloud'];
+  await withModelServer(tags, identifiers, async url => {
+    const models = await discoverModels(url);
+    for (const model of models) {
+      assert.equal(model.local, false);
+      await runChatResponse(url, collectProgress(), {}, model);
+    }
   });
 });
 
