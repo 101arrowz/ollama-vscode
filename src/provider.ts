@@ -520,10 +520,11 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
   ): OllamaLanguageModel {
     const capabilities = mergedCapabilities(model.capabilities, show?.capabilities);
     const name = model.name;
+    const id = modelIdentifier(model);
     const { maxInputTokens, maxOutputTokens } = modelTokenLimits(model, show);
 
     return {
-      id: name,
+      id,
       name,
       family: modelFamily(model, show),
       tooltip: recommended ? 'Recommended' : name,
@@ -534,10 +535,10 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
         toolCalling: hasCapability(capabilities, 'tools', 'tool'),
         imageInput: hasCapability(capabilities, 'vision', 'image')
       },
-      model: name,
+      model: id,
       url: configuration.url,
       headers: configuration.headers,
-      local: !isRemoteModel(model) && !isCloudModel(name),
+      local: !isRemoteModel(model) && !isCloudModel(id),
       recommendedReplacement: replacement
     };
   }
@@ -704,8 +705,9 @@ function selectConfiguredModels(
   configuredModels: readonly string[],
   availableModels: readonly OllamaTagsModel[]
 ): OllamaTagsModel[] {
+  const byID = new Map(availableModels.map(model => [modelIdentifier(model), model]));
   const byName = new Map(availableModels.map(model => [model.name, model]));
-  return configuredModels.map(name => byName.get(name) ?? { name });
+  return configuredModels.map(name => byID.get(name) ?? byName.get(name) ?? { name });
 }
 
 async function hydrateModels(
@@ -714,8 +716,13 @@ async function hydrateModels(
 ): Promise<Array<{ model: OllamaTagsModel; show?: OllamaShowResponse }>> {
   return Promise.all(models.map(async model => ({
     model,
-    show: shouldHydrateModel(model) ? await showModel(ollama, model.name) : undefined
+    show: shouldHydrateModel(model) ? await showModel(ollama, modelIdentifier(model)) : undefined
   })));
+}
+
+function modelIdentifier(model: OllamaTagsModel): string {
+  // Proxies may return a display name that differs from the request identifier.
+  return typeof model.model === 'string' && model.model.length > 0 ? model.model : model.name;
 }
 
 function isOllamaTagsModel(model: unknown): model is OllamaTagsModel {
