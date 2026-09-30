@@ -341,7 +341,8 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
       if (usagePart) {
         progress.report(usagePart);
       }
-      if (promptTokenCount !== undefined) {
+      // Tool definitions contribute prompt tokens that the text estimator does not count.
+      if (promptTokenCount !== undefined && tools.length === 0) {
         this.tokenCounts.record(model.id, messages, promptTokenCount);
       }
       requestSucceeded = true;
@@ -953,6 +954,15 @@ class CalibratedTokenEstimator {
   }
 
   record(modelID: string, messages: readonly vscode.LanguageModelChatRequestMessage[], actual: number) {
+    // Tool history and media also contribute tokens absent from inputToText.
+    // Calibrating against those totals would inflate subsequent text estimates.
+    if (messages.some(message => message.content.some(part => !(
+      part instanceof vscode.LanguageModelTextPart
+      || (part instanceof vscode.LanguageModelDataPart && part.mimeType.startsWith('text/'))
+    )))) {
+      return;
+    }
+
     const texts = messages.map(message => inputToText(message));
     const text = texts.join('\n');
     if (text.length === 0 || actual <= 0) {
