@@ -68,6 +68,76 @@ try {
   Module._load = originalLoad;
 }
 
+for (const { name, options = {}, extraParts = [] } of [
+  {
+    name: 'tool definitions',
+    options: { tools: [{ name: 'lookup', description: 'Look up a value', inputSchema: { type: 'object' } }] }
+  },
+  { name: 'tool calls', extraParts: [new LanguageModelToolCallPart('call-1', 'lookup', { q: 'x' })] },
+  { name: 'tool results', extraParts: [new LanguageModelToolResultPart('call-1', [new LanguageModelTextPart('result')])] },
+  { name: 'images', extraParts: [new LanguageModelDataPart(new Uint8Array([1, 2, 3]), 'image/png')] }
+]) {
+  test(`token calibration ignores prompt overhead from ${name}`, async () => {
+    let promptTokens = 1000;
+    await withServer((request, response) => {
+      request.resume();
+      response.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      response.end(JSON.stringify({ message: { content: 'Hello' }, done: true, prompt_eval_count: promptTokens, eval_count: 7 }) + '\n');
+    }, async url => {
+      const provider = new OllamaLanguageModelProvider();
+      const model = { id: 'test-model:latest', name: 'test-model:latest', model: 'test-model:latest', url, headers: {}, local: false };
+      const token = cancellationTokenSource().token;
+      const text = 'x'.repeat(100);
+      const message = { role: vscode.LanguageModelChatMessageRole.User, content: [new LanguageModelTextPart(text)] };
+      const augmented = { ...message, content: [...message.content, ...extraParts] };
+      const progress = collectProgress();
+      try {
+        assert.equal(await provider.provideTokenCount(model, text, token), 25);
+        await provider.provideLanguageModelChatResponse(model, [augmented], options, progress, token);
+        assert.equal(await provider.provideTokenCount(model, text, token), 25);
+        const usage = progress.reports.find(part => part instanceof LanguageModelDataPart);
+        assert.deepEqual(JSON.parse(new TextDecoder().decode(usage.data)), {
+          prompt_tokens: 1000, completion_tokens: 7, total_tokens: 1007
+        });
+
+        // A text-only prompt still calibrates the model; later tool/image prompts
+        // must preserve that learned ratio rather than resetting or inflating it.
+        promptTokens = 50;
+        await provider.provideLanguageModelChatResponse(model, [message], {}, collectProgress(), token);
+        assert.equal(await provider.provideTokenCount(model, text, token), 34);
+        promptTokens = 1000;
+        await provider.provideLanguageModelChatResponse(model, [augmented], options, collectProgress(), token);
+        assert.equal(await provider.provideTokenCount(model, text, token), 34);
+      } finally {
+        provider.dispose();
+      }
+    });
+  });
+}
+
+test('token calibration accepts text data parts and low character-per-token ratios', async () => {
+  await withServer((request, response) => {
+    request.resume();
+    response.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    response.end(JSON.stringify({ message: { content: 'Hello' }, done: true, prompt_eval_count: 100 }) + '\n');
+  }, async url => {
+    const provider = new OllamaLanguageModelProvider();
+    const model = { id: 'test-model:latest', name: 'test-model:latest', model: 'test-model:latest', url, headers: {}, local: false };
+    const token = cancellationTokenSource().token;
+    const text = '你'.repeat(100);
+    try {
+      await provider.provideLanguageModelChatResponse(model, [{
+        role: vscode.LanguageModelChatMessageRole.User,
+        content: [new LanguageModelDataPart(new TextEncoder().encode(text), 'text/plain')]
+      }], { tools: [] }, collectProgress(), token);
+      assert.equal(await provider.provideTokenCount(model, text, token), 40);
+      assert.equal(await provider.provideTokenCount({ ...model, id: 'other-model' }, text, token), 25);
+    } finally {
+      provider.dispose();
+    }
+  });
+});
+
 test('recovers a stream that ends with done_reason but no done marker', async () => {
   await withServer((request, response) => {
     request.resume();
