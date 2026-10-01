@@ -179,6 +179,7 @@ test('advertises exact metadata controls and sends every selection without trans
     { name: 'custom-thinking:cloud', values: ['brief', 'deep'], default: 'brief' }
   ]) {
     models = [{ name, model: `server/${name}`, capabilities: ['thinking'], remote_host: 'ollama.com',
+      max_context_length: 131072,
       show: { thinking: { values, default: defaultLevel } } }];
     const provider = new OllamaLanguageModelProvider();
     try {

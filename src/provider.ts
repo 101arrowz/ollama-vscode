@@ -783,6 +783,7 @@ function shouldHydrateModel(model: OllamaTagsModel): boolean {
     return true;
   }
   return model.capabilities === undefined
+    || hasCapability(model.capabilities, 'thinking', 'reasoning')
     || (sharedContextWindow(model, undefined) === undefined
       && explicitTokenLimit(model, undefined, 'input') === undefined);
 }
