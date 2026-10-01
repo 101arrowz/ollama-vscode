@@ -39,15 +39,19 @@ The extension discovers models from `http://127.0.0.1:11434` by default.
 
 ## Thinking effort
 
+Configure thinking effort for compatible Ollama models. Each model uses its own
+supported values; models that advertise thinking values through `/api/show`
+do not need a model-specific mapping in the extension.
+
 1. Run `ollama list` to find the exact model name, including its tag.
 2. Open the Command Palette and choose **Preferences: Open User Settings (JSON)**.
-3. Add `ollama.thinkingLevels` to your existing settings object. For example:
+3. Add `ollama.thinkingLevels` to your existing settings object. Replace the
+   placeholders with your model's name and a thinking value it supports:
 
    ```json
    {
      "ollama.thinkingLevels": {
-       "gpt-oss:20b": "low",
-       "qwen3.8:27b-mlx": "medium"
+       "<model-name:tag>": "<supported-level>"
      }
    }
    ```
@@ -55,13 +59,12 @@ The extension discovers models from `http://127.0.0.1:11434` by default.
 4. Save the settings, select the matching Ollama model in Chat, and send a new
    message. Changes apply to the next request; no restart is needed.
 
-Use the exact Ollama model name, including its tag. Supported values depend on
-the model: GPT-OSS accepts `"low"`, `"medium"`, or `"high"`; models that support
-disabling thinking accept `false`. The extension uses the values advertised by
-the server's `/api/show` response, with known-model fallbacks for older servers.
-For Qwen3.8 backends advertising these values, use `false`, `"low"`, `"medium"`,
-or `"xhigh"`. Booleans such as `false` must not be quoted. Remove a model's entry
-to use the server default. Unsupported values are ignored.
+Add an entry for each model you want to configure. Some models accept booleans
+(`true` or `false`); others accept named levels such as `"low"` or `"high"`.
+Use only values supported by the selected model, and do not quote booleans.
+The extension uses the values advertised by the server's `/api/show` response,
+with known-model fallbacks for older servers. Remove a model's entry to use the
+server default. Unsupported values are ignored.
 
 This setting controls the model's thinking effort. Native thinking display and
 the effort dropdown beside the Chat model picker are separate follow-ups. The
