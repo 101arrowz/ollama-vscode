@@ -31,7 +31,9 @@ class LanguageModelDataPart {
   }
 }
 
-class LanguageModelThinkingPart extends LanguageModelTextPart {}
+class LanguageModelThinkingPart {
+  constructor(value) { this.value = value; }
+}
 class LanguageModelToolCallPart {}
 class LanguageModelToolResultPart {}
 
@@ -74,7 +76,7 @@ class Ollama {
   }
 
   async show({ model }) {
-    return models.find(candidate => candidate.name === model)?.show ?? {};
+    return models.find(candidate => (candidate.model || candidate.name) === model)?.show ?? {};
   }
 
   async chat(request) {
@@ -161,4 +163,59 @@ test('exposes thinking controls only with both a verified policy and server capa
   assert.deepEqual(properties['gpt-oss:20b'].thinkingLevel.enum, ['low', 'medium', 'high']);
   assert.equal(properties['gpt-oss:120b'].thinkingLevel, undefined);
   assert.equal(properties['unknown-thinking:cloud'].thinkingLevel, undefined);
+  for (const model of discovered.slice(1)) {
+    await provider.provideLanguageModelChatResponse(model, [], {
+      modelConfiguration: { thinkingLevel: 'high' }
+    }, { report() {} }, cancellationToken);
+    assert.equal(chatRequests.at(-1).think, undefined);
+  }
+});
+
+test('advertises exact metadata controls and sends every selection without translation', async () => {
+  for (const { name, values, default: defaultLevel } of [
+    { name: 'qwen3.8:27b-mlx', values: [false, 'low', 'medium', 'xhigh'], default: 'medium' },
+    { name: 'glm-5.2:cloud', values: [false, 'high', 'max'], default: 'high' },
+    { name: 'qwen3.6:27b', values: [false, true], default: true },
+    { name: 'custom-thinking:cloud', values: ['brief', 'deep'], default: 'brief' }
+  ]) {
+    models = [{ name, model: `server/${name}`, capabilities: ['thinking'], remote_host: 'ollama.com',
+      show: { thinking: { values, default: defaultLevel } } }];
+    const provider = new OllamaLanguageModelProvider();
+    try {
+      const [model] = await provider.provideLanguageModelChatInformation({}, cancellationToken);
+      const property = model.configurationSchema.properties.thinkingLevel;
+      assert.deepEqual(property.enum, values);
+      assert.equal(property.default, defaultLevel);
+      for (const value of [...values, undefined, 'stale', 1, null, {}]) {
+        await provider.provideLanguageModelChatResponse(model, [], {
+          modelConfiguration: { thinkingLevel: value }
+        }, { report() {} }, cancellationToken);
+        assert.equal(chatRequests.at(-1).model, `server/${name}`);
+        assert.equal(chatRequests.at(-1).think,
+          value === undefined ? defaultLevel : values.includes(value) ? value : undefined);
+      }
+    } finally {
+      provider.dispose();
+    }
+  }
+});
+
+test('refreshing metadata rejects a previously supported saved value', async () => {
+  const entry = { name: 'gpt-oss:120b-cloud', capabilities: ['thinking'], remote_host: 'ollama.com',
+    show: { thinking: { values: ['low', 'medium', 'high'], default: 'medium' } } };
+  models = [entry];
+  const provider = new OllamaLanguageModelProvider();
+  try {
+    await provider.provideLanguageModelChatInformation({}, cancellationToken);
+    entry.show.thinking = { values: [false], default: false };
+    provider.refresh();
+    const [model] = await provider.provideLanguageModelChatInformation({}, cancellationToken);
+    assert.equal(model.configurationSchema.properties.thinkingLevel, undefined);
+    await provider.provideLanguageModelChatResponse(model, [], {
+      modelConfiguration: { thinkingLevel: 'high' }
+    }, { report() {} }, cancellationToken);
+    assert.equal(chatRequests.at(-1).think, undefined);
+  } finally {
+    provider.dispose();
+  }
 });

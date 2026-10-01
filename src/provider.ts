@@ -40,10 +40,9 @@ import {
   thinkingLevelLabel,
   thinkingLevelProperty,
   thinkingPolicy,
-  toOllamaThinkValue,
-  type ThinkingPolicy,
-  type ThinkingLevel
+  type ThinkingPolicy
 } from './thinking';
+import { inferenceTimeoutMilliseconds } from './inferenceTimeout';
 
 interface OllamaProviderConfiguration {
   url: string;
@@ -87,15 +86,12 @@ export interface OllamaTagsModel {
 }
 
 interface OllamaShowResponse extends Omit<ShowResponse, 'model_info'> {
+  thinking?: unknown;
   model_info?: ModelInfo;
   context_length?: number;
   max_context_length?: number;
   max_input_tokens?: number;
   max_output_tokens?: number;
-}
-
-interface OllamaModelConfiguration extends vscode.LanguageModelConfigurationSchema {
-  [thinkingLevelProperty]?: ThinkingLevel;
 }
 
 type ModelInfo = Record<string, unknown> | Map<string, unknown>;
@@ -130,6 +126,8 @@ interface OllamaChatResponse extends Partial<Omit<ChatResponse, 'message'>> {
     tool_calls?: OllamaToolCall[];
   };
   done?: boolean;
+  status?: string;
+  done_reason?: string;
 }
 
 interface OllamaErrorResponse {
@@ -250,7 +248,10 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
     }
 
     const disposables: vscode.Disposable[] = [];
-    const chatFetch = createChatFetch();
+    const inferenceTimeout = inferenceTimeoutMilliseconds(
+      vscode.workspace.getConfiguration('ollama').get('inferenceTimeoutMinutes')
+    );
+    const chatFetch = createChatFetch(inferenceTimeout);
     disposables.push(chatFetch);
     const ollama = new Ollama({
       host: model.url,
@@ -262,6 +263,7 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
     this.output?.appendLine(`Sending chat request to ${model.model} at ${model.url}.`);
     let requestSucceeded = false;
     let machineContextSource: vscode.CancellationTokenSource | undefined;
+    let streamCompleted = false;
 
     try {
       let promptTokenCount: number | undefined;
@@ -275,7 +277,7 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
         messages: ollamaMessages,
         stream: true,
         tools: tools.length > 0 ? tools : undefined,
-        think: toOllamaThinkValue(thinkingLevel),
+        think: thinkingLevel,
         options: options.modelOptions ? { ...options.modelOptions } : undefined
       } as ChatRequest & { stream: true });
       void streamRequest.then(
@@ -317,37 +319,49 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
         contextSource.cancel();
       }
 
-      for await (const chunk of stream as AsyncIterable<ChatResponse>) {
-        const response = chunk as OllamaChatResponse;
-        if (typeof chunk.prompt_eval_count === 'number' && chunk.prompt_eval_count >= 0) {
-          promptTokenCount = chunk.prompt_eval_count;
-        }
-        if (typeof chunk.eval_count === 'number' && chunk.eval_count >= 0) {
-          completionTokenCount = chunk.eval_count;
-        }
+      try {
+        for await (const chunk of stream as AsyncIterable<ChatResponse>) {
+          const response = chunk as OllamaChatResponse;
+          if (response.done || response.status === 'success' || response.done_reason) {
+            streamCompleted = true;
+          }
+          if (typeof chunk.prompt_eval_count === 'number' && chunk.prompt_eval_count >= 0) {
+            promptTokenCount = chunk.prompt_eval_count;
+          }
+          if (typeof chunk.eval_count === 'number' && chunk.eval_count >= 0) {
+            completionTokenCount = chunk.eval_count;
+          }
 
-        const content = response.message?.content;
-        const thinking = response.message?.thinking;
-        if (thinking) {
-          progress.report(new vscode.LanguageModelThinkingPart(thinking));
-        }
-        if (content) {
-          progress.report(new vscode.LanguageModelTextPart(content));
-        }
+          const content = response.message?.content;
+          const thinking = response.message?.thinking;
+          if (thinking) {
+            progress.report(new vscode.LanguageModelThinkingPart(thinking));
+          }
+          if (content) {
+            progress.report(new vscode.LanguageModelTextPart(content));
+          }
 
-        for (const toolCall of response.message?.tool_calls ?? []) {
-          progress.report(new vscode.LanguageModelToolCallPart(
-            toolCall.id ?? randomUUID(),
-            toolCall.function.name,
-            toolCall.function.arguments
-          ));
+          for (const toolCall of response.message?.tool_calls ?? []) {
+            progress.report(new vscode.LanguageModelToolCallPart(
+              toolCall.id ?? randomUUID(),
+              toolCall.function.name,
+              toolCall.function.arguments
+            ));
+          }
+        }
+      } catch (streamError) {
+        // Some Ollama backends end the stream with done_reason but without the
+        // client's recognised done/success marker; treat that as a normal end.
+        if (!streamCompleted || !isMissingStreamCompletionError(streamError)) {
+          throw streamError;
         }
       }
       const usagePart = buildUsageDataPart(promptTokenCount, completionTokenCount);
       if (usagePart) {
         progress.report(usagePart);
       }
-      if (promptTokenCount !== undefined) {
+      // Tool definitions contribute prompt tokens that the text estimator does not count.
+      if (promptTokenCount !== undefined && tools.length === 0) {
         this.tokenCounts.record(model.id, messages, promptTokenCount);
       }
       requestSucceeded = true;
@@ -472,7 +486,7 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
     warningRequest: OutdatedModelWarningRequest,
     token: vscode.CancellationToken
   ): Promise<boolean> {
-    if (!isOutdatedAgentModel(model.model)) {
+    if (!isOutdatedAgentModel(model.name)) {
       return true;
     }
     if (this.outdatedModelWarnings.hasShown(warningRequest, model.model)) {
@@ -486,7 +500,7 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
     const chooseAnotherModel = 'Choose another model';
     const continueAnyway = 'Continue anyway';
     const outcome = await showWarningMessageUntilCancelled(
-      `${model.model} may not work as reliably with VS Code agent tools.${guidance}`,
+      `${model.name} may not work as reliably with VS Code agent tools.${guidance}`,
       [chooseAnotherModel, continueAnyway],
       token
     );
@@ -526,13 +540,16 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
   ): OllamaLanguageModel {
     const capabilities = mergedCapabilities(model.capabilities, show?.capabilities);
     const name = model.name;
+    const id = modelIdentifier(model);
     const family = modelFamily(model, show);
-    const policy = thinkingPolicy(name, family);
+    const policy = hasCapability(capabilities, 'thinking', 'reasoning')
+      ? thinkingPolicy(name, family, show?.thinking)
+      : undefined;
     let thinkingProperties: NonNullable<vscode.LanguageModelConfigurationSchema['properties']> = {};
-    if (hasCapability(capabilities, 'thinking', 'reasoning') && policy) {
+    if (policy) {
       thinkingProperties = {
         [thinkingLevelProperty]: {
-          type: 'string',
+          type: ['string', 'boolean'],
           title: 'Thinking Effort',
           enum: policy.levels,
           enumItemLabels: policy.levels.map(thinkingLevelLabel),
@@ -545,7 +562,7 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
     const { maxInputTokens, maxOutputTokens } = modelTokenLimits(model, show);
 
     return {
-      id: name,
+      id,
       name,
       family,
       tooltip: recommended ? 'Recommended' : name,
@@ -556,10 +573,10 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
         toolCalling: hasCapability(capabilities, 'tools', 'tool'),
         imageInput: hasCapability(capabilities, 'vision', 'image')
       },
-      model: name,
+      model: id,
       url: configuration.url,
       headers: configuration.headers,
-      local: !isRemoteModel(model) && !isCloudModel(name),
+      local: !isRemoteModel(model) && !isCloudModel(id),
       thinkingPolicy: policy,
       recommendedReplacement: replacement,
       configurationSchema: {
@@ -567,6 +584,11 @@ export class OllamaLanguageModelProvider implements vscode.LanguageModelChatProv
       }
     };
   }
+}
+
+export function isMissingStreamCompletionError(error: unknown): boolean {
+  return error instanceof Error
+    && error.message === 'Did not receive done or success response in stream.';
 }
 
 /**
@@ -725,8 +747,9 @@ function selectConfiguredModels(
   configuredModels: readonly string[],
   availableModels: readonly OllamaTagsModel[]
 ): OllamaTagsModel[] {
+  const byID = new Map(availableModels.map(model => [modelIdentifier(model), model]));
   const byName = new Map(availableModels.map(model => [model.name, model]));
-  return configuredModels.map(name => byName.get(name) ?? { name });
+  return configuredModels.map(name => byID.get(name) ?? byName.get(name) ?? { name });
 }
 
 async function hydrateModels(
@@ -735,8 +758,13 @@ async function hydrateModels(
 ): Promise<Array<{ model: OllamaTagsModel; show?: OllamaShowResponse }>> {
   return Promise.all(models.map(async model => ({
     model,
-    show: shouldHydrateModel(model) ? await showModel(ollama, model.name) : undefined
+    show: shouldHydrateModel(model) ? await showModel(ollama, modelIdentifier(model)) : undefined
   })));
+}
+
+function modelIdentifier(model: OllamaTagsModel): string {
+  // Proxies may return a display name that differs from the request identifier.
+  return typeof model.model === 'string' && model.model.length > 0 ? model.model : model.name;
 }
 
 function isOllamaTagsModel(model: unknown): model is OllamaTagsModel {
@@ -967,6 +995,15 @@ class CalibratedTokenEstimator {
   }
 
   record(modelID: string, messages: readonly vscode.LanguageModelChatRequestMessage[], actual: number) {
+    // Tool history and media also contribute tokens absent from inputToText.
+    // Calibrating against those totals would inflate subsequent text estimates.
+    if (messages.some(message => message.content.some(part => !(
+      part instanceof vscode.LanguageModelTextPart
+      || (part instanceof vscode.LanguageModelDataPart && part.mimeType.startsWith('text/'))
+    )))) {
+      return;
+    }
+
     const texts = messages.map(message => inputToText(message));
     const text = texts.join('\n');
     if (text.length === 0 || actual <= 0) {

@@ -1,8 +1,6 @@
 export const thinkingLevelProperty = 'thinkingLevel';
 
-export const thinkingLevels = ['none', 'low', 'medium', 'high', 'max'] as const;
-export type ThinkingLevel = (typeof thinkingLevels)[number];
-export type OllamaThinkValue = boolean | Exclude<ThinkingLevel, 'none'>;
+export type ThinkingLevel = boolean | string;
 
 export interface ThinkingPolicy {
   levels: readonly ThinkingLevel[];
@@ -17,11 +15,23 @@ export interface ThinkingPolicy {
 // - https://ollama.com/library/glm-5.2
 
 /**
- * Return only thinking controls documented for a known Ollama model family.
- * Ollama's generic `thinking` capability does not expose the accepted values,
- * so unknown models do not receive a control rather than guessing.
+ * Prefer the exact values and default advertised by /api/show. Older servers
+ * omit this metadata, so retain the documented mappings for known models only.
  */
-export function thinkingPolicy(modelName: string, family?: string): ThinkingPolicy | undefined {
+export function thinkingPolicy(modelName: string, family?: string, metadata?: unknown): ThinkingPolicy | undefined {
+  if (metadata !== undefined) {
+    if (typeof metadata !== 'object' || metadata === null) {
+      return undefined;
+    }
+    const { values, default: defaultLevel } = metadata as { values?: unknown; default?: unknown };
+    if (!Array.isArray(values) || !values.every(isThinkingLevel) || !isThinkingLevel(defaultLevel)) {
+      return undefined;
+    }
+    const levels = [...new Set(values)];
+    // A single value is not a configurable control (e.g. [false] means no thinking).
+    return levels.length > 1 && levels.includes(defaultLevel) ? { levels, defaultLevel } : undefined;
+  }
+
   const identifiers = [modelNameWithoutTag(modelName), family]
     .filter((value): value is string => typeof value === 'string')
     .map(normalizeIdentifier);
@@ -35,8 +45,8 @@ export function thinkingPolicy(modelName: string, family?: string): ThinkingPoli
 
   if (identifiers.some(value => value === 'deepseek-v4-flash' || value === 'deepseek-v4-pro')) {
     return {
-      levels: ['none', 'high', 'max'],
-      defaultLevel: 'none'
+      levels: [false, 'high', 'max'],
+      defaultLevel: false
     };
   }
 
@@ -51,7 +61,7 @@ export function thinkingPolicy(modelName: string, family?: string): ThinkingPoli
 }
 
 export function isThinkingLevel(value: unknown): value is ThinkingLevel {
-  return typeof value === 'string' && (thinkingLevels as readonly string[]).includes(value);
+  return typeof value === 'boolean' || (typeof value === 'string' && value.trim().length > 0);
 }
 
 export function supportedThinkingLevel(
@@ -70,24 +80,26 @@ export function supportedThinkingLevel(
   return policy.levels.includes(value) ? value : undefined;
 }
 
-export function toOllamaThinkValue(level: ThinkingLevel | undefined): OllamaThinkValue | undefined {
-  if (level === undefined) {
-    return undefined;
-  }
-  return level === 'none' ? false : level;
-}
-
 export function thinkingLevelLabel(level: ThinkingLevel): string {
+  if (typeof level === 'boolean') {
+    return level ? 'On' : 'Off';
+  }
+  if (level === 'xhigh') {
+    return 'Extra high';
+  }
   return level.charAt(0).toUpperCase() + level.slice(1);
 }
 
 export function thinkingLevelDescription(level: ThinkingLevel): string {
   switch (level) {
-    case 'none': return 'Disable thinking';
+    case false: return 'Disable thinking';
+    case true: return 'Enable thinking';
     case 'low': return 'Use low thinking effort';
     case 'medium': return 'Use medium thinking effort';
     case 'high': return 'Use high thinking effort';
     case 'max': return 'Use maximum thinking effort';
+    case 'xhigh': return 'Use extra high thinking effort';
+    default: return `Use ${level} thinking`;
   }
 }
 

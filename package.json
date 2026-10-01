@@ -3,7 +3,7 @@
   "displayName": "Ollama",
   "description": "Ollama language model provider for VS Code.",
   "publisher": "Ollama",
-  "version": "0.0.8",
+  "version": "0.0.11",
   "icon": "images/icon.png",
   "license": "MIT",
   "repository": {
@@ -84,6 +84,13 @@
             "additionalProperties": {
               "type": "string"
             }
+          },
+          "ollama.inferenceTimeoutMinutes": {
+            "type": "integer",
+            "default": 10,
+            "minimum": 1,
+            "maximum": 60,
+            "description": "Maximum time to wait for Ollama to begin an inference response. Enter a whole number from 1 to 60 minutes. Cancelling Chat still stops the request immediately."
           }
         }
       }

@@ -3,8 +3,7 @@ const test = require('node:test');
 
 const {
   supportedThinkingLevel,
-  thinkingPolicy,
-  toOllamaThinkValue
+  thinkingPolicy
 } = require('../out/thinking');
 
 test('uses documented GPT-OSS effort levels and does not offer disabling', () => {
@@ -20,8 +19,8 @@ test('uses documented GPT-OSS effort levels and does not offer disabling', () =>
 
 test('uses documented DeepSeek V4 non-thinking, high, and max modes', () => {
   const expected = {
-    levels: ['none', 'high', 'max'],
-    defaultLevel: 'none'
+    levels: [false, 'high', 'max'],
+    defaultLevel: false
   };
 
   assert.deepEqual(thinkingPolicy('deepseek-v4-flash:cloud'), expected);
@@ -43,13 +42,41 @@ test('does not expose a control for models without a verified mapping', () => {
   assert.equal(thinkingPolicy('my-deepseek-v4-experiment'), undefined);
 });
 
-test('translates UI thinking levels to Ollama request values', () => {
-  assert.equal(toOllamaThinkValue(undefined), undefined);
-  assert.equal(toOllamaThinkValue('none'), false);
-  assert.equal(toOllamaThinkValue('low'), 'low');
-  assert.equal(toOllamaThinkValue('medium'), 'medium');
-  assert.equal(toOllamaThinkValue('high'), 'high');
-  assert.equal(toOllamaThinkValue('max'), 'max');
+test('uses Qwen3.8 metadata without inventing high/max aliases or a default', () => {
+  for (const defaultLevel of ['medium', 'xhigh']) {
+    const policy = thinkingPolicy('qwen3.8:27b', 'qwen35', {
+      values: [false, 'low', 'medium', 'xhigh'], default: defaultLevel
+    });
+    assert.deepEqual(policy, { levels: [false, 'low', 'medium', 'xhigh'], defaultLevel });
+    for (const value of policy.levels) assert.equal(supportedThinkingLevel(policy, value), value);
+    for (const value of ['high', 'max', 'none', true, null, 1, {}, '']) {
+      assert.equal(supportedThinkingLevel(policy, value), undefined);
+    }
+  }
+  assert.equal(thinkingPolicy('qwen3.8:27b', 'qwen35'), undefined);
+});
+
+test('metadata overrides old mappings and supports exact boolean and named values', () => {
+  assert.deepEqual(thinkingPolicy('glm-5.2:cloud', undefined, {
+    values: [false, 'high', 'max'], default: 'high'
+  }), { levels: [false, 'high', 'max'], defaultLevel: 'high' });
+  assert.deepEqual(thinkingPolicy('custom-model', undefined, {
+    values: [false, true], default: true
+  }), { levels: [false, true], defaultLevel: true });
+  const policy = thinkingPolicy('custom-model', undefined, {
+    values: ['brief', 'deep'], default: 'brief'
+  });
+  assert.equal(supportedThinkingLevel(policy, 'deep'), 'deep');
+  assert.equal(supportedThinkingLevel(policy, 'high'), undefined);
+});
+
+test('non-configurable or malformed metadata hides controls instead of falling back', () => {
+  for (const metadata of [null, false, {}, {values: []},
+    { values: [false], default: false }, { values: [true], default: true },
+    { values: ['high', 'high'], default: 'high' },
+    { values: ['low', 'high'], default: 'medium' },
+    { values: ['low', 5], default: 'low' }, { values: ['', 'high'], default: 'high' }
+  ]) assert.equal(thinkingPolicy('gpt-oss:20b', 'gptoss', metadata), undefined);
 });
 
 test('accepts only levels supported by the selected model policy', () => {
@@ -59,7 +86,7 @@ test('accepts only levels supported by the selected model policy', () => {
   assert.equal(supportedThinkingLevel(gptOSS, 'none'), undefined);
 
   const deepSeekV4 = thinkingPolicy('deepseek-v4-flash:cloud');
-  assert.equal(supportedThinkingLevel(deepSeekV4, undefined), 'none');
+  assert.equal(supportedThinkingLevel(deepSeekV4, undefined), false);
   assert.equal(supportedThinkingLevel(deepSeekV4, 'max'), 'max');
   assert.equal(supportedThinkingLevel(deepSeekV4, 'low'), undefined);
 
