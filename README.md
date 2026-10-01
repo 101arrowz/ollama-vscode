@@ -39,27 +39,35 @@ The extension discovers models from `http://127.0.0.1:11434` by default.
 
 ## Thinking effort
 
-Open **Preferences: Open User Settings (JSON)** from the Command Palette and
-add an `ollama.thinkingLevels` entry for each model you want to configure:
+1. Run `ollama list` to find the exact model name, including its tag.
+2. Open the Command Palette and choose **Preferences: Open User Settings (JSON)**.
+3. Add `ollama.thinkingLevels` to your existing settings object. For example:
 
-```json
-{
-  "ollama.thinkingLevels": {
-    "gpt-oss:20b": "low",
-    "qwen3.8:27b-mlx": false
-  }
-}
-```
+   ```json
+   {
+     "ollama.thinkingLevels": {
+       "gpt-oss:20b": "low",
+       "qwen3.8:27b-mlx": "medium"
+     }
+   }
+   ```
+
+4. Save the settings, select the matching Ollama model in Chat, and send a new
+   message. Changes apply to the next request; no restart is needed.
 
 Use the exact Ollama model name, including its tag. Supported values depend on
 the model: GPT-OSS accepts `"low"`, `"medium"`, or `"high"`; models that support
 disabling thinking accept `false`. The extension uses the values advertised by
 the server's `/api/show` response, with known-model fallbacks for older servers.
-Remove an entry to use the server default. Unsupported values are ignored.
-Changes apply to the next request.
+For Qwen3.8 backends advertising these values, use `false`, `"low"`, `"medium"`,
+or `"xhigh"`. Booleans such as `false` must not be quoted. Remove a model's entry
+to use the server default. Unsupported values are ignored.
 
-This setting controls the model's thinking effort. Thinking text and a thinking
-effort dropdown in Chat are not included.
+This setting controls the model's thinking effort. Native thinking display and
+the effort dropdown beside the Chat model picker are separate follow-ups. The
+dropdown depends on a VS Code proposed API; using a normal setting keeps this
+change compatible with stable extension APIs and avoids the
+[Marketplace restriction on proposed APIs](https://code.visualstudio.com/api/advanced-topics/using-proposed-api).
 
 ## Commands
 
