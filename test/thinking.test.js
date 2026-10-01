@@ -81,17 +81,17 @@ test('non-configurable or malformed metadata hides controls instead of falling b
 
 test('accepts only levels supported by the selected model policy', () => {
   const gptOSS = thinkingPolicy('gpt-oss:20b');
-  assert.equal(supportedThinkingLevel(gptOSS, undefined), 'medium');
+  assert.equal(supportedThinkingLevel(gptOSS, undefined), undefined);
   assert.equal(supportedThinkingLevel(gptOSS, 'low'), 'low');
   assert.equal(supportedThinkingLevel(gptOSS, 'none'), undefined);
 
   const deepSeekV4 = thinkingPolicy('deepseek-v4-flash:cloud');
-  assert.equal(supportedThinkingLevel(deepSeekV4, undefined), false);
+  assert.equal(supportedThinkingLevel(deepSeekV4, undefined), undefined);
   assert.equal(supportedThinkingLevel(deepSeekV4, 'max'), 'max');
   assert.equal(supportedThinkingLevel(deepSeekV4, 'low'), undefined);
 
   const glm52 = thinkingPolicy('glm-5.2:cloud');
-  assert.equal(supportedThinkingLevel(glm52, undefined), 'high');
+  assert.equal(supportedThinkingLevel(glm52, undefined), undefined);
   assert.equal(supportedThinkingLevel(glm52, 'high'), 'high');
   assert.equal(supportedThinkingLevel(glm52, 'medium'), undefined);
 });

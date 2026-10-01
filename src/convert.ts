@@ -7,7 +7,6 @@ export function toOllamaMessages(messages: readonly vscode.LanguageModelChatRequ
   for (const message of messages) {
     const text: string[] = [];
     const images: string[] = [];
-    const thinking: string[] = [];
     const toolCalls: NonNullable<OllamaChatMessage['tool_calls']> = [];
     const toolResults: OllamaChatMessage[] = [];
 
@@ -36,17 +35,13 @@ export function toOllamaMessages(messages: readonly vscode.LanguageModelChatRequ
           ...(result.images.length > 0 ? { images: result.images } : {}),
           tool_call_id: part.callId
         });
-      } else if (part instanceof vscode.LanguageModelThinkingPart) {
-        const parts = Array.isArray(part.value) ? part.value : [part.value];
-        thinking.push(...parts);
       }
     }
 
-    if (text.length > 0 || thinking.length > 0 || images.length > 0 || toolCalls.length > 0) {
+    if (text.length > 0 || images.length > 0 || toolCalls.length > 0) {
       converted.push({
         role: roleToOllama(message.role),
         content: text.join('\n'),
-        ...(thinking.length > 0 ? { thinking: thinking.join('') } : {}),
         images: images.length > 0 ? images : undefined,
         tool_calls: toolCalls.length > 0 ? toolCalls : undefined
       });

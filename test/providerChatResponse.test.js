@@ -9,10 +9,6 @@ class LanguageModelTextPart {
   }
 }
 
-class LanguageModelThinkingPart {
-  constructor(value) { this.value = value; }
-}
-
 class LanguageModelDataPart {
   constructor(data, mimeType) {
     this.data = data;
@@ -46,7 +42,6 @@ class EventEmitter {
 const vscode = {
   LanguageModelChatMessageRole: { User: 1, Assistant: 2, System: 3 },
   LanguageModelTextPart,
-  LanguageModelThinkingPart,
   LanguageModelDataPart,
   LanguageModelToolCallPart,
   LanguageModelToolResultPart,
@@ -54,9 +49,12 @@ const vscode = {
   CancellationTokenSource: cancellationTokenSource,
   window: { showWarningMessage: async () => undefined },
   workspace: {
-    getConfiguration: () => ({ get: (_key, fallback) => fallback })
+    getConfiguration: () => ({ get: (key, fallback) => key in settings ? settings[key] : fallback })
   }
 };
+
+let settings = {};
+test.beforeEach(() => { settings = {}; });
 
 const originalLoad = Module._load;
 Module._load = function(request, parent, isMain) {
@@ -80,8 +78,7 @@ for (const { name, options = {}, extraParts = [] } of [
   },
   { name: 'tool calls', extraParts: [new LanguageModelToolCallPart('call-1', 'lookup', { q: 'x' })] },
   { name: 'tool results', extraParts: [new LanguageModelToolResultPart('call-1', [new LanguageModelTextPart('result')])] },
-  { name: 'images', extraParts: [new LanguageModelDataPart(new Uint8Array([1, 2, 3]), 'image/png')] },
-  { name: 'thinking history', extraParts: [new LanguageModelThinkingPart('Previous thinking')] }
+  { name: 'images', extraParts: [new LanguageModelDataPart(new Uint8Array([1, 2, 3]), 'image/png')] }
 ]) {
   test(`token calibration ignores prompt overhead from ${name}`, async () => {
     let promptTokens = 1000;
@@ -144,7 +141,7 @@ test('token calibration accepts text data parts and low character-per-token rati
   });
 });
 
-test('streams thinking before text and preserves thinking and tool history on the next turn', { timeout: 5000 }, async () => {
+test('applies effort settings without leaking thinking into answers or changing tool history', { timeout: 5000 }, async () => {
   const requests = [];
   await withServer(async (request, response) => {
     let body = '';
@@ -164,31 +161,28 @@ test('streams thinking before text and preserves thinking and tool history on th
     const user = { role: 1, content: [new LanguageModelTextPart('Check x')] };
     const progress = collectProgress();
     try {
-      await provider.provideLanguageModelChatResponse(model, [user], {
-        modelConfiguration: { thinkingLevel: 'xhigh' }
-      }, progress, token);
+      settings.thinkingLevels = { [model.model]: 'xhigh' };
+      await provider.provideLanguageModelChatResponse(model, [user], {}, progress, token);
       assert.deepEqual(progress.reports.map(part => part.constructor.name), [
-        'LanguageModelThinkingPart', 'LanguageModelThinkingPart', 'LanguageModelTextPart',
-        'LanguageModelToolCallPart', 'LanguageModelDataPart'
+        'LanguageModelTextPart', 'LanguageModelToolCallPart', 'LanguageModelDataPart'
       ]);
+      assert.equal(progress.reports[0].value, 'Checking.');
       assert.equal(requests[0].think, 'xhigh');
       const history = [user, { role: 2, content: progress.reports.slice(0, -1) }, {
         role: 1, content: [new LanguageModelToolResultPart('call-1', [new LanguageModelTextPart('42')])]
       }];
-      await provider.provideLanguageModelChatResponse(model, history, {
-        modelConfiguration: { thinkingLevel: false }
-      }, collectProgress(), token);
+      settings.thinkingLevels[model.model] = false;
+      await provider.provideLanguageModelChatResponse(model, history, {}, collectProgress(), token);
       assert.equal(requests[1].think, false);
       assert.deepEqual(requests[1].messages, [
         { role: 'user', content: 'Check x' },
-        { role: 'assistant', content: 'Checking.', thinking: 'Let me think.',
+        { role: 'assistant', content: 'Checking.',
           tool_calls: [{ id: 'call-1', function: { name: 'lookup', arguments: { q: 'x' } } }] },
         { role: 'tool', content: '42', tool_call_id: 'call-1' }
       ]);
       for (const stale of ['high', 'max', 'none']) {
-        await provider.provideLanguageModelChatResponse(model, [user], {
-          modelConfiguration: { thinkingLevel: stale }
-        }, collectProgress(), token);
+        settings.thinkingLevels[model.model] = stale;
+        await provider.provideLanguageModelChatResponse(model, [user], {}, collectProgress(), token);
         assert.equal(Object.hasOwn(requests.at(-1), 'think'), false);
       }
     } finally {
@@ -197,16 +191,18 @@ test('streams thinking before text and preserves thinking and tool history on th
   });
 });
 
-test('cancelling streamed thinking closes the request and a later ordinary chat still succeeds', { timeout: 5000 }, async () => {
+test('cancelling while the server is thinking closes the request and a later chat succeeds', { timeout: 5000 }, async () => {
   let requests = 0;
   let closed;
   const connectionClosed = new Promise(resolve => { closed = resolve; });
+  let started;
+  const thinkingStarted = new Promise(resolve => { started = resolve; });
   await withServer((request, response) => {
     request.resume();
     response.writeHead(200, { 'content-type': 'application/x-ndjson' });
     if (++requests === 1) {
       response.on('close', closed);
-      response.write(JSON.stringify({ message: { thinking: 'Working' } }) + '\n');
+      response.write(JSON.stringify({ message: { thinking: 'Working' } }) + '\n', started);
     } else {
       response.end(JSON.stringify({ message: { content: 'Hello' }, done: true }) + '\n');
     }
@@ -217,11 +213,14 @@ test('cancelling streamed thinking closes the request and a later ordinary chat 
     const reports = [];
     try {
       const cancelled = provider.provideLanguageModelChatResponse(model, [], {}, {
-        report(part) { reports.push(part); source.cancel(); }
+        report(part) { reports.push(part); }
       }, source.token);
-      await assert.rejects(cancelled, /abort|cancel/i);
+      const rejected = assert.rejects(cancelled, /abort|cancel/i);
+      await thinkingStarted;
+      source.cancel();
+      await rejected;
       await connectionClosed;
-      assert.deepEqual(reports.map(part => part.constructor.name), ['LanguageModelThinkingPart']);
+      assert.deepEqual(reports, []);
       const progress = collectProgress();
       await provider.provideLanguageModelChatResponse(model, [], {}, progress, cancellationTokenSource().token);
       assert.equal(progress.reports[0].value, 'Hello');

@@ -37,6 +37,30 @@ Local models do not require sign-in. Run `ollama signin` to use cloud models.
 
 The extension discovers models from `http://127.0.0.1:11434` by default.
 
+## Thinking effort
+
+Open **Preferences: Open User Settings (JSON)** from the Command Palette and
+add an `ollama.thinkingLevels` entry for each model you want to configure:
+
+```json
+{
+  "ollama.thinkingLevels": {
+    "gpt-oss:20b": "low",
+    "qwen3.8:27b-mlx": false
+  }
+}
+```
+
+Use the exact Ollama model name, including its tag. Supported values depend on
+the model: GPT-OSS accepts `"low"`, `"medium"`, or `"high"`; models that support
+disabling thinking accept `false`. The extension uses the values advertised by
+the server's `/api/show` response, with known-model fallbacks for older servers.
+Remove an entry to use the server default. Unsupported values are ignored.
+Changes apply to the next request.
+
+This setting controls the model's thinking effort. Thinking text and a thinking
+effort dropdown in Chat are not included.
+
 ## Commands
 
 The extension adds these commands to the Command Palette:

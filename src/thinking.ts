@@ -1,5 +1,3 @@
-export const thinkingLevelProperty = 'thinkingLevel';
-
 export type ThinkingLevel = boolean | string;
 
 export interface ThinkingPolicy {
@@ -71,36 +69,10 @@ export function supportedThinkingLevel(
   if (!policy) {
     return undefined;
   }
-  if (value === undefined) {
-    return policy.defaultLevel;
-  }
   if (!isThinkingLevel(value)) {
     return undefined;
   }
   return policy.levels.includes(value) ? value : undefined;
-}
-
-export function thinkingLevelLabel(level: ThinkingLevel): string {
-  if (typeof level === 'boolean') {
-    return level ? 'On' : 'Off';
-  }
-  if (level === 'xhigh') {
-    return 'Extra high';
-  }
-  return level.charAt(0).toUpperCase() + level.slice(1);
-}
-
-export function thinkingLevelDescription(level: ThinkingLevel): string {
-  switch (level) {
-    case false: return 'Disable thinking';
-    case true: return 'Enable thinking';
-    case 'low': return 'Use low thinking effort';
-    case 'medium': return 'Use medium thinking effort';
-    case 'high': return 'Use high thinking effort';
-    case 'max': return 'Use maximum thinking effort';
-    case 'xhigh': return 'Use extra high thinking effort';
-    default: return `Use ${level} thinking`;
-  }
 }
 
 function modelNameWithoutTag(modelName: string): string {
